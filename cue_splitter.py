@@ -10,6 +10,7 @@ import shlex
 import datetime
 import subprocess
 import itertools
+import pprint
 import math
 
 # Remove line from top of lines and calculate indentation and return
@@ -49,12 +50,16 @@ def simple_parse(lines, depth = 0):
   while len(lines) > 0:
     (line, l, indent) = pop_line(lines)
     (key, _, value) = l.partition(' ')
-    if not key in out:
-      out[key] = []
-    obj = { '': shlex.split(value) }
-    out[key].append(obj)
+    if (key == "FILE" and depth > 0):
+      lines.appendleft(line)
+      break
+    else:
+      if not key in out:
+        out[key] = []
+      obj = { '': shlex.split(value) }
+      out[key].append(obj)
     try:
-      (next_line, _, next_indent) = pop_line(lines)
+      (next_line, nl, next_indent) = pop_line(lines)
     except IndexError:
       break
     lines.appendleft(next_line)
@@ -91,16 +96,17 @@ def main(argv=[]):
   cue_dir = cue_file.parent
   
   cue_data = deque([l.rstrip() for l in open(cue_file, encoding=args.cue_encoding)])
+  #pprint.pp(cue_data)
   cue = simple_parse(cue_data)
-  
+  #pprint.pp(cue)
   metadata = {}
   tracks = []
   file = { 'metadata': metadata, 'tracks': tracks }
   
   # TODO: Handle multifile cues?
-  file['track_count'] = len(cue['FILE'][0]['TRACK'])
+  file['track_count'] = sum([len(x['TRACK']) for x in cue['FILE']])
+  #print(file)
   
-  file['path'] = cue_dir / cue['FILE'][0][''][0]
   metadata['album'] = cue['TITLE'][0][''][0]
   if 'PERFORMER' in cue:
     metadata['album_artist'] = cue['PERFORMER'][0][''][0]
@@ -127,10 +133,11 @@ def main(argv=[]):
   for f in cue['FILE']:
     for t in f['TRACK']:
       metadata = {}
-      track = { 'metadata': metadata }
+      track = { 'metadata': metadata, 'path': cue_dir / f[''][0] }
       track['id'] = int(t[''][0])
       metadata['track'] = f"{track['id']}/{file['track_count']}"
       metadata['title'] = t['TITLE'][0][''][0]
+      metadata['disc'] = cue["FILE"].index(f)+1
       if 'PERFORMER' in t:
         metadata['artist'] = t['PERFORMER'][0][''][0]
       if 'SONGWRITER' in t:
@@ -155,7 +162,7 @@ def main(argv=[]):
           track['pregap_time'] = parse_time(index[''][1])
       
       tracks.append(track)
-  
+
   # Order by start time
   time_ordered_tracks = deque(reversed(sorted(tracks,
     key = lambda t: t['start_time'])))
@@ -170,13 +177,13 @@ def main(argv=[]):
       track['duration'] = end_time - start_time
     end_time = pregap_time
   
-  ffmpeg = ['ffmpeg']
+  ffmpeg = ['/usr/bin/ffmpeg']
   
   file_meta_args = [f'{k.upper()}={v}' for (k, v) in file['metadata'].items()]
   track_padding = math.ceil(math.log10(len(file['tracks'])))
   
   args.output_path.resolve().mkdir(exist_ok=True)
-  
+
   for track in file['tracks']:
     track_meta_args = [f'{k.upper()}={v}' for (k, v) in track['metadata'].items()]
     meta_args = list(itertools.chain.from_iterable([['-metadata', v] for v in file_meta_args + track_meta_args]))
@@ -192,7 +199,7 @@ def main(argv=[]):
     command = (ffmpeg
       + [
         '-ss', str(track['start_time']),
-        '-i', str(file['path']),
+        '-i', str(track['path']),
         # TODO: argparse codec default='flac'
         #'-c:a', encoding,
         '-vn', # ffmpeg interprets album art as video
@@ -201,7 +208,7 @@ def main(argv=[]):
       + meta_args
       + [ str(args.output_path.resolve() /
         out_filename) ])
-    
+    #pprint.pp(tracks)
     print(' '.join(command))
     if not args.dry_run:
       subprocess.run(command)
